@@ -22,16 +22,26 @@ from nanobot.webui.mcp_presets_api import mcp_presets_settings_action
 from nanobot.webui.settings_api import (
     WebUISettingsError,
     create_model_configuration,
+    create_skill,
     decorate_settings_payload,
+    delete_skill,
+    edit_skill,
+    generate_skill,
+    get_skill_content,
+    get_skill_registries,
+    install_skill_from_registry,
     login_oauth_provider,
     logout_oauth_provider,
     provider_models_payload,
+    search_registry_skills,
     settings_payload,
     update_agent_settings,
     update_image_generation_settings,
     update_model_configuration,
     update_network_safety_settings,
     update_provider_settings,
+    update_skill_registries,
+    update_skills_settings,
     update_web_search_settings,
 )
 
@@ -99,6 +109,26 @@ class WebUISettingsRouter:
             return self._handle_settings_image_generation_update(request)
         if path == "/api/settings/network-safety/update":
             return self._handle_settings_network_safety_update(request)
+        if path == "/api/settings/skills/update":
+            return self._handle_settings_skills_update(request)
+        if path == "/api/settings/skills/content":
+            return self._handle_settings_skills_content(request)
+        if path == "/api/settings/skills/create":
+            return self._handle_settings_skills_create(request)
+        if path == "/api/settings/skills/edit":
+            return self._handle_settings_skills_edit(request)
+        if path == "/api/settings/skills/delete":
+            return self._handle_settings_skills_delete(request)
+        if path == "/api/settings/skills/install":
+            return await self._handle_settings_skills_install(request)
+        if path == "/api/settings/skills/search-registry":
+            return self._handle_settings_skills_search_registry(request)
+        if path == "/api/settings/skills/generate":
+            return await self._handle_settings_skills_generate(request)
+        if path == "/api/settings/skills/registries":
+            return self._handle_settings_skills_registries(request)
+        if path == "/api/settings/skills/registries/update":
+            return self._handle_settings_skills_registries_update(request)
         if path == "/api/settings/cli-apps":
             return self._handle_settings_cli_apps(request)
         if path == "/api/settings/cli-apps/install":
@@ -275,6 +305,139 @@ class WebUISettingsRouter:
         except WebUISettingsError as e:
             return self._error_response(e.status, e.message)
         return self._json_response(self._with_restart_state(payload, section="runtime"))
+
+    def _handle_settings_skills_update(self, request: WsRequest) -> Response:
+        if not self._authorized(request):
+            return self._unauthorized()
+        try:
+            payload = update_skills_settings(self._query(request))
+        except WebUISettingsError as e:
+            return self._error_response(e.status, e.message)
+        return self._json_response(self._with_restart_state(payload))
+
+    def _handle_settings_skills_content(self, request: WsRequest) -> Response:
+        if not self._authorized(request):
+            return self._unauthorized()
+        try:
+            from nanobot.config.loader import load_config
+
+            config = load_config()
+            name = self._query(request).get("skill", [None])[0]
+            if not name:
+                return self._error_response(400, "skill name is required")
+            payload = get_skill_content(config, name)
+        except WebUISettingsError as e:
+            return self._error_response(e.status, e.message)
+        return self._json_response(payload)
+
+    def _handle_settings_skills_create(self, request: WsRequest) -> Response:
+        if not self._authorized(request):
+            return self._unauthorized()
+        try:
+            from nanobot.config.loader import load_config
+
+            config = load_config()
+            q = self._query(request)
+            name = q.get("skill", [None])[0]
+            description = q.get("description", [None])[0]
+            body = q.get("body", [None])[0]
+            if not name:
+                return self._error_response(400, "skill name is required")
+            payload = create_skill(config, name, description, body)
+        except WebUISettingsError as e:
+            return self._error_response(e.status, e.message)
+        return self._json_response(payload)
+
+    def _handle_settings_skills_edit(self, request: WsRequest) -> Response:
+        if not self._authorized(request):
+            return self._unauthorized()
+        try:
+            from nanobot.config.loader import load_config
+
+            config = load_config()
+            q = self._query(request)
+            name = q.get("skill", [None])[0]
+            content = q.get("content", [None])[0]
+            if not name:
+                return self._error_response(400, "skill name is required")
+            if not content:
+                return self._error_response(400, "skill content is required")
+            payload = edit_skill(config, name, content)
+        except WebUISettingsError as e:
+            return self._error_response(e.status, e.message)
+        return self._json_response(payload)
+
+    def _handle_settings_skills_delete(self, request: WsRequest) -> Response:
+        if not self._authorized(request):
+            return self._unauthorized()
+        try:
+            from nanobot.config.loader import load_config
+
+            config = load_config()
+            name = self._query(request).get("skill", [None])[0]
+            if not name:
+                return self._error_response(400, "skill name is required")
+            payload = delete_skill(config, name)
+        except WebUISettingsError as e:
+            return self._error_response(e.status, e.message)
+        return self._json_response(payload)
+
+    async def _handle_settings_skills_install(self, request: WsRequest) -> Response:
+        if not self._authorized(request):
+            return self._unauthorized()
+        try:
+            payload = await asyncio.to_thread(install_skill_from_registry, self._query(request))
+        except WebUISettingsError as e:
+            return self._error_response(e.status, e.message)
+        return self._json_response(self._with_restart_state(payload))
+
+    def _handle_settings_skills_search_registry(self, request: WsRequest) -> Response:
+        if not self._authorized(request):
+            return self._unauthorized()
+        try:
+            payload = search_registry_skills(self._query(request))
+        except WebUISettingsError as e:
+            return self._error_response(e.status, e.message)
+        return self._json_response(payload)
+
+    async def _handle_settings_skills_generate(self, request: WsRequest) -> Response:
+        if not self._authorized(request):
+            return self._unauthorized()
+        try:
+            prompt = self._query(request).get("prompt", [""])[0] or ""
+            if not prompt:
+                return self._error_response(400, "prompt is required")
+            payload = await asyncio.to_thread(generate_skill, prompt)
+        except WebUISettingsError as e:
+            return self._error_response(e.status, e.message)
+        except Exception as e:
+            self.logger.exception("skill generation failed")
+            return self._error_response(500, str(e)[:200])
+        return self._json_response(payload)
+
+    def _handle_settings_skills_registries(self, request: WsRequest) -> Response:
+        if not self._authorized(request):
+            return self._unauthorized()
+        try:
+            payload = get_skill_registries()
+        except WebUISettingsError as e:
+            return self._error_response(e.status, e.message)
+        return self._json_response(payload)
+
+    def _handle_settings_skills_registries_update(self, request: WsRequest) -> Response:
+        if not self._authorized(request):
+            return self._unauthorized()
+        try:
+            raw = self._query(request).get("registries", [None])[0]
+            if not raw:
+                return self._error_response(400, "registries payload is required")
+            registries = json.loads(raw)
+            payload = update_skill_registries(registries)
+        except WebUISettingsError as e:
+            return self._error_response(e.status, e.message)
+        except (json.JSONDecodeError, ValueError) as e:
+            return self._error_response(400, f"invalid registries JSON: {e}")
+        return self._json_response(payload)
 
     def _handle_settings_cli_apps(self, request: WsRequest) -> Response:
         if not self._authorized(request):

@@ -1,4 +1,5 @@
 """Configuration schema using Pydantic."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -37,10 +38,16 @@ class ChannelsConfig(Base):
     send_progress: bool = True  # stream agent's text progress to the channel
     send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
     show_reasoning: bool = True  # surface model reasoning when channel implements it
-    extract_document_text: bool = True  # extract text from document attachments before sending to the model
-    send_max_retries: int = Field(default=3, ge=0, le=10)  # Max delivery attempts (initial send included)
+    extract_document_text: bool = (
+        True  # extract text from document attachments before sending to the model
+    )
+    send_max_retries: int = Field(
+        default=3, ge=0, le=10
+    )  # Max delivery attempts (initial send included)
     transcription_provider: str = "groq"  # Voice transcription backend: "groq" or "openai"
-    transcription_language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")  # Optional ISO-639-1 hint for audio transcription
+    transcription_language: str | None = Field(
+        default=None, pattern=r"^[a-z]{2,3}$"
+    )  # Optional ISO-639-1 hint for audio transcription
 
 
 class DreamConfig(Base):
@@ -100,6 +107,7 @@ class ModelPresetConfig(Base):
 
     def to_generation_settings(self) -> Any:
         from nanobot.providers.base import GenerationSettings
+
         return GenerationSettings(
             temperature=self.temperature,
             max_tokens=self.max_tokens,
@@ -132,12 +140,18 @@ class AgentDefaults(Base):
         validation_alias=AliasChoices("toolHintMaxLength"),
         serialization_alias="toolHintMaxLength",
     )  # Max characters for tool hint display (e.g. "$ cd …/project && npm test")
-    reasoning_effort: str | None = None  # low / medium / high / adaptive / none — LLM thinking effort; None preserves the provider default
+    reasoning_effort: str | None = (
+        None  # low / medium / high / adaptive / none — LLM thinking effort; None preserves the provider default
+    )
     timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
     bot_name: str = "nanobot"  # Display name shown in CLI prompts (e.g. "{name} is thinking...")
     bot_icon: str = "🐈"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
-    unified_session: bool = False  # Share one session across all channels (single-user multi-device)
-    disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
+    unified_session: bool = (
+        False  # Share one session across all channels (single-user multi-device)
+    )
+    disabled_skills: list[str] = Field(
+        default_factory=list
+    )  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
     session_ttl_minutes: int = Field(
         default=0,
         ge=0,
@@ -171,7 +185,9 @@ class ProviderConfig(Base):
     api_base: str | None = None
     api_type: Literal["auto", "chat_completions", "responses"] = "auto"  # Request API surface
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
-    extra_body: dict[str, Any] | None = None  # Extra provider request fields; shape depends on provider/API surface
+    extra_body: dict[str, Any] | None = (
+        None  # Extra provider request fields; shape depends on provider/API surface
+    )
 
 
 class BedrockProviderConfig(ProviderConfig):
@@ -185,8 +201,12 @@ class ProvidersConfig(Base):
     """Configuration for LLM providers."""
 
     custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
-    azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)  # Azure OpenAI (model = deployment name)
-    bedrock: BedrockProviderConfig = Field(default_factory=BedrockProviderConfig)  # AWS Bedrock Converse
+    azure_openai: ProviderConfig = Field(
+        default_factory=ProviderConfig
+    )  # Azure OpenAI (model = deployment name)
+    bedrock: BedrockProviderConfig = Field(
+        default_factory=BedrockProviderConfig
+    )  # AWS Bedrock Converse
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
     openai: ProviderConfig = Field(default_factory=ProviderConfig)
     openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
@@ -204,7 +224,9 @@ class ProvidersConfig(Base):
     gemini: ProviderConfig = Field(default_factory=ProviderConfig)
     moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax: ProviderConfig = Field(default_factory=ProviderConfig)
-    minimax_anthropic: ProviderConfig = Field(default_factory=ProviderConfig)  # MiniMax Anthropic endpoint (thinking)
+    minimax_anthropic: ProviderConfig = Field(
+        default_factory=ProviderConfig
+    )  # MiniMax Anthropic endpoint (thinking)
     mistral: ProviderConfig = Field(default_factory=ProviderConfig)
     stepfun: ProviderConfig = Field(default_factory=ProviderConfig)  # Step Fun (阶跃星辰)
     xiaomi_mimo: ProviderConfig = Field(default_factory=ProviderConfig)  # Xiaomi MIMO (小米)
@@ -214,11 +236,21 @@ class ProvidersConfig(Base):
     siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow (硅基流动)
     novita: ProviderConfig = Field(default_factory=ProviderConfig)  # Novita AI
     volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine (火山引擎)
-    volcengine_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine Coding Plan
-    byteplus: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus (VolcEngine international)
-    byteplus_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus Coding Plan
-    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # OpenAI Codex (OAuth)
-    github_copilot: ProviderConfig = Field(default_factory=ProviderConfig, exclude=True)  # Github Copilot (OAuth)
+    volcengine_coding_plan: ProviderConfig = Field(
+        default_factory=ProviderConfig
+    )  # VolcEngine Coding Plan
+    byteplus: ProviderConfig = Field(
+        default_factory=ProviderConfig
+    )  # BytePlus (VolcEngine international)
+    byteplus_coding_plan: ProviderConfig = Field(
+        default_factory=ProviderConfig
+    )  # BytePlus Coding Plan
+    openai_codex: ProviderConfig = Field(
+        default_factory=ProviderConfig, exclude=True
+    )  # OpenAI Codex (OAuth)
+    github_copilot: ProviderConfig = Field(
+        default_factory=ProviderConfig, exclude=True
+    )  # Github Copilot (OAuth)
     qianfan: ProviderConfig = Field(default_factory=ProviderConfig)  # Qianfan (百度千帆)
     nvidia: ProviderConfig = Field(default_factory=ProviderConfig)  # NVIDIA NIM (nvapi- keys)
 
@@ -268,12 +300,15 @@ class MCPServerConfig(Base):
     url: str = ""  # HTTP/SSE: endpoint URL
     headers: dict[str, str] = Field(default_factory=dict)  # HTTP/SSE: custom headers
     tool_timeout: int = 30  # seconds before a tool call is cancelled
-    enabled_tools: list[str] = Field(default_factory=lambda: ["*"])  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
+    enabled_tools: list[str] = Field(
+        default_factory=lambda: ["*"]
+    )  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
 
 
 def _lazy_default(module_path: str, class_name: str) -> Any:
     """Deferred import helper for ToolsConfig default factories."""
     import importlib
+
     module = importlib.import_module(module_path)
     return getattr(module, class_name)()
 
@@ -286,14 +321,26 @@ class ToolsConfig(Base):
     Base from schema.py).
     """
 
-    web: WebToolsConfig = Field(default_factory=lambda: _lazy_default("nanobot.agent.tools.web", "WebToolsConfig"))
-    exec: ExecToolConfig = Field(default_factory=lambda: _lazy_default("nanobot.agent.tools.shell", "ExecToolConfig"))
-    cli_apps: CliAppsToolConfig = Field(default_factory=lambda: _lazy_default("nanobot.agent.tools.cli_apps", "CliAppsToolConfig"))
-    my: MyToolConfig = Field(default_factory=lambda: _lazy_default("nanobot.agent.tools.self", "MyToolConfig"))
-    image_generation: ImageGenerationToolConfig = Field(
-        default_factory=lambda: _lazy_default("nanobot.agent.tools.image_generation", "ImageGenerationToolConfig"),
+    web: WebToolsConfig = Field(
+        default_factory=lambda: _lazy_default("nanobot.agent.tools.web", "WebToolsConfig")
     )
-    restrict_to_workspace: bool = False  # policy intent: keep tool access inside workspace when possible
+    exec: ExecToolConfig = Field(
+        default_factory=lambda: _lazy_default("nanobot.agent.tools.shell", "ExecToolConfig")
+    )
+    cli_apps: CliAppsToolConfig = Field(
+        default_factory=lambda: _lazy_default("nanobot.agent.tools.cli_apps", "CliAppsToolConfig")
+    )
+    my: MyToolConfig = Field(
+        default_factory=lambda: _lazy_default("nanobot.agent.tools.self", "MyToolConfig")
+    )
+    image_generation: ImageGenerationToolConfig = Field(
+        default_factory=lambda: _lazy_default(
+            "nanobot.agent.tools.image_generation", "ImageGenerationToolConfig"
+        ),
+    )
+    restrict_to_workspace: bool = (
+        False  # policy intent: keep tool access inside workspace when possible
+    )
     webui_allow_local_service_access: bool = Field(
         default=True,
         validation_alias=AliasChoices(
@@ -304,7 +351,74 @@ class ToolsConfig(Base):
         ),
     )  # allow WebUI Full Access shell checks against localhost services; legacy allowLocalPreviewAccess still reads
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
-    ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
+    ssrf_whitelist: list[str] = Field(
+        default_factory=list
+    )  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
+    skill_registries: list[dict[str, Any]] = Field(
+        default_factory=lambda: [
+            {"name": "ClawHub", "type": "clawhub", "url": "https://clawhub.ai", "enabled": True},
+            {
+                "name": "skills.sh",
+                "type": "vercel_skills",
+                "url": "https://skills.sh",
+                "enabled": True,
+            },
+            {
+                "name": "SkillsMP",
+                "type": "skillsmp",
+                "url": "https://skillsmp.com",
+                "enabled": True,
+            },
+            {
+                "name": "GitHub (skill-md topic)",
+                "type": "github_topics",
+                "url": "https://github.com/topics/skill-md",
+                "enabled": True,
+            },
+            {
+                "name": "npm (skill-md)",
+                "type": "npm_skills",
+                "url": "https://www.npmjs.com/search?q=keywords:skill-md",
+                "enabled": True,
+            },
+            {
+                "name": "Anthropic Official",
+                "type": "anthropic_skills",
+                "url": "https://github.com/anthropics/skills",
+                "enabled": True,
+            },
+            {
+                "name": "addyosmani agent-skills",
+                "type": "addyosmani_skills",
+                "url": "https://github.com/addyosmani/agent-skills",
+                "enabled": True,
+            },
+            {
+                "name": "LobeHub Marketplace",
+                "type": "lobehub",
+                "url": "https://lobehub.com/skills",
+                "enabled": True,
+            },
+            {
+                "name": "OpenPackage",
+                "type": "openpackage",
+                "url": "https://openpackage.dev",
+                "enabled": True,
+            },
+            {
+                "name": "AutoSkills (midudev)",
+                "type": "autoskills",
+                "url": "https://autoskills.sh",
+                "enabled": True,
+            },
+            {
+                "name": "Custom",
+                "type": "custom",
+                "url": "",
+                "enabled": False,
+            },
+        ]
+    )
 
 
 class Config(BaseSettings):
@@ -342,9 +456,12 @@ class Config(BaseSettings):
         """Return the implicit `default` preset from agents.defaults fields."""
         d = self.agents.defaults
         return ModelPresetConfig(
-            model=d.model, provider=d.provider, max_tokens=d.max_tokens,
+            model=d.model,
+            provider=d.provider,
+            max_tokens=d.max_tokens,
             context_window_tokens=d.context_window_tokens,
-            temperature=d.temperature, reasoning_effort=d.reasoning_effort,
+            temperature=d.temperature,
+            reasoning_effort=d.reasoning_effort,
         )
 
     def resolve_preset(self, name: str | None = None) -> ModelPresetConfig:
@@ -362,7 +479,8 @@ class Config(BaseSettings):
         return Path(self.agents.defaults.workspace).expanduser()
 
     def _match_provider(
-        self, model: str | None = None,
+        self,
+        model: str | None = None,
         *,
         preset: ModelPresetConfig | None = None,
     ) -> tuple["ProviderConfig | None", str | None]:

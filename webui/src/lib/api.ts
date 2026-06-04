@@ -8,9 +8,11 @@ import type {
   NetworkSafetySettingsUpdate,
   ProviderModelsPayload,
   ProviderSettingsUpdate,
+  RegistrySearchPayload,
   SettingsPayload,
   SettingsUpdate,
   SidebarStatePayload,
+  SkillContentPayload,
   SlashCommand,
   WebSearchSettingsUpdate,
   WorkspacesPayload,
@@ -144,6 +146,42 @@ export async function deleteSession(
     token,
   );
   return body.deleted;
+}
+
+export async function generateSkill(
+  token: string,
+  prompt: string,
+  base: string = "",
+): Promise<{ name: string; content: string; generated: boolean }> {
+  const query = new URLSearchParams();
+  query.set("prompt", prompt);
+  return request<{ name: string; content: string; generated: boolean }>(
+    `${base}/api/settings/skills/generate?${query}`,
+    token,
+  );
+}
+
+export async function fetchSkillRegistries(
+  token: string,
+  base: string = "",
+): Promise<{ registries: Array<{ name: string; type: string; url: string; enabled: boolean }> }> {
+  return request<{ registries: Array<{ name: string; type: string; url: string; enabled: boolean }> }>(
+    `${base}/api/settings/skills/registries`,
+    token,
+  );
+}
+
+export async function updateSkillRegistries(
+  token: string,
+  registries: Array<{ name: string; type: string; url: string; enabled: boolean }>,
+  base: string = "",
+): Promise<{ registries: Array<{ name: string; type: string; url: string; enabled: boolean }> }> {
+  const query = new URLSearchParams();
+  query.set("registries", JSON.stringify(registries));
+  return request<{ registries: Array<{ name: string; type: string; url: string; enabled: boolean }> }>(
+    `${base}/api/settings/skills/registries/update?${query}`,
+    token,
+  );
 }
 
 export async function fetchSettings(
@@ -474,6 +512,105 @@ export async function updateImageGenerationSettings(
   query.set("max_images_per_turn", String(update.maxImagesPerTurn));
   return request<SettingsPayload>(
     `${base}/api/settings/image-generation/update?${query}`,
+    token,
+  );
+}
+
+export async function updateSkillsSettings(
+  token: string,
+  skill: string,
+  enabled: boolean,
+  base: string = "",
+): Promise<SettingsPayload> {
+  const query = new URLSearchParams();
+  query.set("skill", skill);
+  query.set("enabled", String(enabled));
+  return request<SettingsPayload>(
+    `${base}/api/settings/skills/update?${query}`,
+    token,
+  );
+}
+
+export async function fetchSkillContent(
+  token: string,
+  skill: string,
+  base: string = "",
+): Promise<SkillContentPayload> {
+  const query = new URLSearchParams();
+  query.set("skill", skill);
+  return request<SkillContentPayload>(
+    `${base}/api/settings/skills/content?${query}`,
+    token,
+  );
+}
+
+export async function createSkill(
+  token: string,
+  name: string,
+  description?: string,
+  base: string = "",
+): Promise<{ name: string; path: string; created: boolean }> {
+  const query = new URLSearchParams();
+  query.set("skill", name);
+  if (description) query.set("description", description);
+  return request<{ name: string; path: string; created: boolean }>(
+    `${base}/api/settings/skills/create?${query}`,
+    token,
+  );
+}
+
+export async function editSkill(
+  token: string,
+  name: string,
+  content: string,
+  base: string = "",
+): Promise<{ name: string; path: string; updated: boolean }> {
+  const query = new URLSearchParams();
+  query.set("skill", name);
+  query.set("content", content);
+  return request<{ name: string; path: string; updated: boolean }>(
+    `${base}/api/settings/skills/edit?${query}`,
+    token,
+  );
+}
+
+export async function deleteSkill(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<{ name: string; deleted: boolean }> {
+  const query = new URLSearchParams();
+  query.set("skill", name);
+  return request<{ name: string; deleted: boolean }>(
+    `${base}/api/settings/skills/delete?${query}`,
+    token,
+  );
+}
+
+export async function installSkillFromRegistry(
+  token: string,
+  skill: string,
+  base: string = "",
+): Promise<SettingsPayload> {
+  const query = new URLSearchParams();
+  query.set("skill", skill);
+  return request<SettingsPayload>(
+    `${base}/api/settings/skills/install?${query}`,
+    token,
+  );
+}
+
+export async function searchRegistrySkills(
+  token: string,
+  query_: string,
+  limit: number = 10,
+  base: string = "",
+): Promise<RegistrySearchPayload> {
+  const q = new URLSearchParams();
+  q.set("query", query_);
+  q.set("limit", String(limit));
+  return request<RegistrySearchPayload>(
+    `${base}/api/settings/skills/search-registry?${q}`,
     token,
   );
 }

@@ -419,8 +419,7 @@ def provider_models_payload(query: QueryParams) -> dict[str, Any]:
         "fetched_at": time.time(),
     }
     if (
-        spec.backend in _MODEL_LIST_UNSUPPORTED_BACKENDS
-        and spec.name != "minimax_anthropic"
+        spec.backend in _MODEL_LIST_UNSUPPORTED_BACKENDS and spec.name != "minimax_anthropic"
     ) or spec.is_oauth:
         return {
             **base_payload,
@@ -538,10 +537,7 @@ def _validate_configured_provider(config: Any, provider: str) -> None:
     if spec is None:
         raise WebUISettingsError("unknown provider")
     provider_config = getattr(config.providers, provider, None)
-    if (
-        provider_config is None
-        or not _provider_configured_for_settings(spec, provider_config)
-    ):
+    if provider_config is None or not _provider_configured_for_settings(spec, provider_config):
         raise WebUISettingsError("provider is not configured")
 
 
@@ -561,9 +557,7 @@ def _image_generation_provider_rows(config: Any) -> list[dict[str, Any]]:
                 "label": spec.label if spec is not None else name,
                 "configured": configured,
                 "auth_type": "oauth" if spec is not None and spec.is_oauth else "api_key",
-                "api_key_hint": _mask_secret_hint(
-                    getattr(provider_config, "api_key", None)
-                ),
+                "api_key_hint": _mask_secret_hint(getattr(provider_config, "api_key", None)),
                 "api_base": getattr(provider_config, "api_base", None),
                 "default_api_base": (
                     spec.default_api_base if spec and spec.default_api_base else None
@@ -637,11 +631,7 @@ def settings_payload(
     )
     image_providers = _image_generation_provider_rows(config)
     selected_image_provider = next(
-        (
-            provider
-            for provider in image_providers
-            if provider["name"] == image_config.provider
-        ),
+        (provider for provider in image_providers if provider["name"] == image_config.provider),
         None,
     )
     model_presets = [
@@ -745,6 +735,7 @@ def settings_payload(
             },
             "unified_session": defaults.unified_session,
         },
+        "skills": _build_skills_payload(config),
         "advanced": {
             "restrict_to_workspace": config.tools.restrict_to_workspace,
             "workspace_sandbox": sandbox_status.as_dict(),
@@ -767,6 +758,905 @@ def settings_payload(
         restart_required_sections=restart_required_sections,
         apply_state=apply_state,
     )
+
+
+def _build_skills_payload(config) -> dict[str, Any]:
+    from nanobot.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
+
+    disabled = set(config.agents.defaults.disabled_skills)
+    loader = SkillsLoader(config.workspace_path, disabled_skills=set())
+
+    entries: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+
+    workspace_skills_dir = config.workspace_path / "skills"
+
+    if workspace_skills_dir.exists():
+        for skill_dir in sorted(workspace_skills_dir.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            name = skill_dir.name
+            seen_names.add(name)
+            meta = loader.get_skill_metadata(name) or {}
+            entries.append(
+                _skill_dir_to_entry(
+                    skill_dir,
+                    name,
+                    "workspace",
+                    meta,
+                    disabled,
+                )
+            )
+
+    if BUILTIN_SKILLS_DIR.exists():
+        for skill_dir in sorted(BUILTIN_SKILLS_DIR.iterdir()):
+            if not skill_dir.is_dir():
+                continue
+            name = skill_dir.name
+            if name in seen_names:
+                continue
+            meta = loader.get_skill_metadata(name) or {}
+            entries.append(
+                _skill_dir_to_entry(
+                    skill_dir,
+                    name,
+                    "builtin",
+                    meta,
+                    disabled,
+                )
+            )
+
+    return {"skills": entries, "disabled_skills": sorted(disabled)}
+
+
+def _skill_dir_to_entry(
+    skill_dir: Any,
+    name: str,
+    source: str,
+    meta: dict,
+    disabled: set,
+) -> dict[str, Any]:
+    from nanobot.agent.skills import SkillsLoader
+
+    scripts_dir = skill_dir / "scripts"
+    references_dir = skill_dir / "references"
+    assets_dir = skill_dir / "assets"
+
+    total_size = 0
+    for f in skill_dir.rglob("*"):
+        if f.is_file():
+            try:
+                total_size += f.stat().st_size
+            except OSError:
+                pass
+
+    return {
+        "name": name,
+        "source": source,
+        "path": str(skill_dir),
+        "description": meta.get("description", ""),
+        "enabled": name not in disabled,
+        "always": bool(meta.get("always", False)),
+        "license": meta.get("license", ""),
+        "has_scripts": scripts_dir.is_dir(),
+        "has_references": references_dir.is_dir(),
+        "has_assets": assets_dir.is_dir(),
+        "size_bytes": total_size,
+    }
+
+
+def _read_skill_file(skill_path: Any) -> str | None:
+    p = skill_path / "SKILL.md"
+    if not p.exists():
+        return None
+    return p.read_text(encoding="utf-8")
+
+
+def _write_skill_file(skill_path: Any, content: str) -> None:
+    p = skill_path / "SKILL.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+
+
+def get_skill_content(config, name: str) -> dict[str, Any]:
+    from nanobot.agent.skills import BUILTIN_SKILLS_DIR
+
+    skill_dir = config.workspace_path / "skills" / name
+    if not skill_dir.is_dir():
+        skill_dir = BUILTIN_SKILLS_DIR / name
+    if not skill_dir.is_dir():
+        raise WebUISettingsError("skill not found", status=404)
+
+    content = _read_skill_file(skill_dir)
+    if content is None:
+        raise WebUISettingsError("skill SKILL.md not found", status=404)
+
+    return {
+        "name": name,
+        "path": str(skill_dir),
+        "source": "workspace" if "workspace" in str(skill_dir) else "builtin",
+        "content": content,
+    }
+
+
+def create_skill(config, name: str, description: str | None, body: str | None) -> dict[str, Any]:
+    import re
+
+    if not name or not re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", name):
+        raise WebUISettingsError("invalid skill name (lowercase, hyphens, max 64 chars)")
+    if len(name) > 64:
+        raise WebUISettingsError("skill name too long (max 64 chars)")
+
+    skill_dir = config.workspace_path / "skills" / name
+    if skill_dir.exists():
+        raise WebUISettingsError("skill already exists")
+
+    desc = description or "[TODO: Describe what this skill does and when to use it.]"
+    body_text = body or f"# {name}\n\n## Overview\n\n[TODO: Write instructions.]\n"
+
+    content = f"---\nname: {name}\ndescription: {desc}\n---\n\n{body_text}"
+    _write_skill_file(skill_dir, content)
+
+    return {"name": name, "path": str(skill_dir), "created": True}
+
+
+def edit_skill(config, name: str, content: str) -> dict[str, Any]:
+    skill_dir = config.workspace_path / "skills" / name
+    if not skill_dir.is_dir():
+        raise WebUISettingsError(
+            "workspace skill not found (builtin skills are read-only)", status=404
+        )
+
+    _write_skill_file(skill_dir, content)
+    return {"name": name, "path": str(skill_dir), "updated": True}
+
+
+def delete_skill(config, name: str) -> dict[str, Any]:
+    import shutil
+
+    skill_dir = config.workspace_path / "skills" / name
+    if not skill_dir.is_dir():
+        from nanobot.agent.skills import BUILTIN_SKILLS_DIR
+
+        if (BUILTIN_SKILLS_DIR / name).is_dir():
+            raise WebUISettingsError("cannot delete builtin skills", status=403)
+        raise WebUISettingsError("skill not found", status=404)
+
+    shutil.rmtree(str(skill_dir))
+    return {"name": name, "deleted": True}
+
+
+def update_skills_settings(query: QueryParams) -> dict[str, Any]:
+    config = load_config()
+    disabled = set(config.agents.defaults.disabled_skills)
+
+    skill_name = query.get("skill", [None])[0]
+    enabled = query.get("enabled", ["true"])[0]
+
+    if not skill_name:
+        raise WebUISettingsError("skill name is required")
+
+    if enabled.lower() in ("false", "0", "no"):
+        disabled.add(skill_name)
+    else:
+        disabled.discard(skill_name)
+
+    config.agents.defaults.disabled_skills = sorted(disabled)
+    save_config(config)
+    return settings_payload()
+
+
+def generate_skill(prompt: str) -> dict[str, Any]:
+    import json
+    import httpx
+
+    config = load_config()
+    effective = config.resolve_preset()
+    provider = config.get_provider(effective.model, preset=effective)
+
+    if not provider or not provider.api_key:
+        raise WebUISettingsError("no provider configured with an API key")
+
+    system_prompt = """You are a SKILL.md specification expert. Generate a complete SKILL.md file following the agentskills.io v1 standard.
+
+## SKILL.md Format Specification
+
+The file has two parts separated by `---`:
+
+### Part 1: YAML Frontmatter (REQUIRED fields)
+```yaml
+---
+name: skill-name  # lowercase, hyphens only, max 64 chars, must match folder name
+description: >-   # 1-3 sentences: what the skill does AND when to activate it. Include trigger keywords.
+  Description here.
+license: MIT  # OPTIONAL
+compatibility: requires-node-20  # OPTIONAL
+allowed-tools: read_file write_file  # OPTIONAL space-separated tool names
+metadata:  # OPTIONAL key-value map
+  requires:
+    bins: [git]
+    env: [GITHUB_TOKEN]
+---
+```
+
+### Part 2: Markdown Body (instructions loaded when skill activates)
+- Step-by-step instructions
+- Concrete examples
+- Edge cases and error handling
+- Reference links to bundled scripts/references/assets
+- Keep under 500 lines / 5000 tokens
+
+### Design Principles
+- Concise. Challenge every token.
+- Progressive disclosure: metadata first, body on activation, resources on demand
+- One skill, one job
+- Description is the primary activation trigger
+
+## Output
+
+Return ONLY valid JSON with this exact structure:
+{"name": "skill-name", "content": "full SKILL.md content including frontmatter and body"}
+
+Do NOT wrap in markdown code blocks. Output ONLY the JSON object."""
+
+    user_msg = f"Generate a SKILL.md for: {prompt}"
+
+    # Build the provider-specific API call
+    provider_name = (
+        config.get_provider_name(effective.model, preset=effective) or effective.provider
+    )
+    spec = None
+    for s in __import__("nanobot.providers.registry", fromlist=["PROVIDERS"]).PROVIDERS:
+        if s.name == provider_name:
+            spec = s
+            break
+
+    if spec is None:
+        raise WebUISettingsError(f"unknown provider: {provider_name}")
+
+    # Try OpenAI-compatible endpoint first (most providers support this)
+    api_base = provider.api_base or spec.default_api_base or ""
+    if api_base:
+        api_base = api_base.rstrip("/")
+        if not api_base.endswith("/v1"):
+            if "/v1" not in api_base:
+                api_base += "/v1"
+
+    if not api_base and provider_name == "deepseek":
+        api_base = "https://api.deepseek.com/v1"
+    elif not api_base and provider_name == "openai":
+        api_base = "https://api.openai.com/v1"
+    elif not api_base and provider_name == "anthropic":
+        api_base = "https://api.anthropic.com/v1"
+
+    text: str = ""
+    try:
+        client = httpx.Client(timeout=60.0)
+        headers = {
+            "Authorization": f"Bearer {provider.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        if spec.is_anthropic:
+            response = client.post(
+                f"{api_base}/messages",
+                json={
+                    "model": effective.model,
+                    "max_tokens": 4096,
+                    "system": system_prompt,
+                    "messages": [{"role": "user", "content": user_msg}],
+                },
+                headers={**headers, "anthropic-version": "2023-06-01"},
+            )
+            data = response.json()
+            text = data.get("content", [{}])[0].get("text", "")
+        else:
+            response = client.post(
+                f"{api_base}/chat/completions",
+                json={
+                    "model": effective.model,
+                    "max_tokens": 4096,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    "temperature": 0.3,
+                },
+                headers=headers,
+            )
+            data = response.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+        if not text:
+            raise WebUISettingsError("LLM returned empty response")
+
+        # Parse the JSON from the response
+        text = text.strip()
+        # Remove markdown code blocks if present
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:]) if lines else text
+            if text.endswith("```"):
+                text = text[:-3].strip()
+            text = text.strip()
+
+        result = json.loads(text)
+        if not isinstance(result, dict) or "name" not in result or "content" not in result:
+            raise WebUISettingsError("LLM returned invalid skill format")
+
+        return {
+            "name": str(result["name"]),
+            "content": str(result["content"]),
+            "generated": True,
+        }
+    except json.JSONDecodeError:
+        raise WebUISettingsError(f"failed to parse LLM response as JSON: {text[:300]}")
+    except Exception as e:
+        raise WebUISettingsError(f"generation failed: {str(e)[:200]}")
+
+
+def install_skill_from_registry(query: QueryParams) -> dict[str, Any]:
+    import subprocess
+    import shutil
+    import re
+
+    skill_name = query.get("skill", [None])[0]
+    if not skill_name:
+        raise WebUISettingsError("skill name is required")
+
+    config = load_config()
+    workspace = str(config.workspace_path)
+
+    npx = shutil.which("npx") or shutil.which("npx.cmd")
+    if not npx:
+        raise WebUISettingsError("Node.js / npx is required to install skills from registry")
+
+    # Determine install method based on slug format
+    if skill_name.startswith("http"):
+        # skills.sh URL: https://skills.sh/owner/repo/skill -> npx skills add owner/repo@skill
+        m = re.match(r"https?://skills\.sh/([^/]+/[^/]+)/(.+)", skill_name)
+        if m:
+            slug = f"{m.group(1)}@{m.group(2)}"
+            cmd = [npx, "--yes", "skills", "add", slug, "--workdir", workspace]
+            timeout = 120
+        else:
+            raise WebUISettingsError(f"unsupported URL: {skill_name}")
+    elif "/" in skill_name and "@" in skill_name:
+        # owner/repo@skill format -> npx skills add
+        cmd = [npx, "--yes", "skills", "add", skill_name, "--workdir", workspace]
+        timeout = 120
+    elif "/" in skill_name:
+        # GitHub owner/repo format -> npx skills add owner/repo
+        cmd = [npx, "--yes", "skills", "add", skill_name, "--workdir", workspace]
+        timeout = 120
+    else:
+        # Plain name -> npx clawhub install
+        cmd = [npx, "--yes", "clawhub@latest", "install", skill_name, "--workdir", workspace]
+        timeout = 120
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise WebUISettingsError("registry install timed out")
+    except FileNotFoundError:
+        raise WebUISettingsError("Node.js / npx is required")
+
+    if result.returncode != 0:
+        err = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise WebUISettingsError(f"install failed: {err[:200]}")
+
+    return settings_payload()
+
+
+def get_skill_registries() -> dict[str, Any]:
+    config = load_config()
+    registries = config.tools.skill_registries
+    return {"registries": list(registries)}
+
+
+def update_skill_registries(registries: list[dict[str, Any]]) -> dict[str, Any]:
+    config = load_config()
+    config.tools.skill_registries = registries
+    save_config(config)
+    return {"registries": list(registries)}
+
+
+def _search_clawhub(search: str, limit: int) -> list[dict[str, Any]]:
+    import json as _json
+    import subprocess
+    import shutil
+
+    npx = shutil.which("npx") or shutil.which("npx.cmd")
+    if not npx:
+        return []
+    args = [npx, "--yes", "clawhub@latest", "search"]
+    if search:
+        args.extend([search])
+    args.extend(["--limit", str(limit)])
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=60)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+    if result.returncode != 0:
+        return []
+    items: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines() + result.stderr.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = _json.loads(line)
+            if isinstance(parsed, dict) and "name" in parsed:
+                items.append(
+                    {
+                        "name": parsed.get("name", ""),
+                        "description": parsed.get("description", ""),
+                        "author": parsed.get("author", ""),
+                        "version": parsed.get("version", ""),
+                        "slug": parsed.get("slug", ""),
+                        "registry": "ClawHub",
+                    }
+                )
+        except (_json.JSONDecodeError, ValueError):
+            continue
+    return items
+
+
+def _search_skillsmp(search: str, limit: int) -> list[dict[str, Any]]:
+    import json as _json
+
+    try:
+        import urllib.request
+        import urllib.parse
+
+        url = f"https://skillsmp.com/api/v1/skills?q={urllib.parse.quote(search)}&limit={limit}"
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = _json.loads(resp.read())
+    except Exception:
+        return []
+
+    items: list[dict[str, Any]] = []
+    results = data if isinstance(data, list) else data.get("results", data.get("skills", []))
+    for item in results[:limit]:
+        if isinstance(item, dict):
+            items.append(
+                {
+                    "name": item.get("name", item.get("title", "")),
+                    "description": item.get("description", item.get("summary", "")),
+                    "author": item.get("author", item.get("owner", "")),
+                    "version": item.get("version", ""),
+                    "slug": item.get("slug", item.get("name", item.get("id", ""))),
+                    "registry": "SkillsMP",
+                }
+            )
+    return items
+
+
+def _strip_ansi(text: str) -> str:
+    import re
+
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def _search_vercel_skills(search: str, limit: int) -> list[dict[str, Any]]:
+    import subprocess
+    import shutil
+    import re
+
+    npx = shutil.which("npx") or shutil.which("npx.cmd")
+    if not npx:
+        return []
+    args = [npx, "--yes", "skills", "find"]
+    if search:
+        args.extend([search])
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+
+    text = _strip_ansi(result.stdout + "\n" + result.stderr)
+    items: list[dict[str, Any]] = []
+
+    current: dict[str, Any] | None = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("Install with") or line.startswith("npx skills"):
+            continue
+
+        url_match = re.match(r"└\s*(https?://\S+)", line)
+        if url_match:
+            if current and current.get("name"):
+                current["slug"] = url_match.group(1)
+                items.append(current)
+            current = None
+            continue
+
+        name_match = re.match(r"^([\w.\-@/]+)\b\s*(.*)", line)
+        if name_match:
+            name = name_match.group(1).strip().rstrip("@")
+            rest = name_match.group(2).strip()
+            installs = ""
+            install_match = re.search(r"([\d.]+[KMB]?\s*installs?)", rest)
+            if install_match:
+                installs = install_match.group(1).strip()
+            if "/" in name:
+                parts = name.split("/", 1)
+                source = parts[0] + "/" + parts[1].split("@")[0] if len(parts) > 1 else name
+                skill = (
+                    parts[1].split("@")[-1]
+                    if len(parts) > 1 and "@" in parts[1]
+                    else (parts[1] if len(parts) > 1 else name)
+                )
+                desc = ""
+                if installs:
+                    desc = installs
+                current = {
+                    "name": skill,
+                    "description": desc,
+                    "author": parts[0],
+                    "slug": name,
+                    "registry": "skills.sh",
+                }
+                if name_match:
+                    desc_text = rest.replace(installs, "").strip().strip("└").strip()
+                    if desc_text:
+                        current["description"] = f"{desc_text} {installs}".strip()
+    if current and current.get("name"):
+        if not current.get("slug"):
+            current["slug"] = current.get("name", "")
+        items.append(current)
+
+    return items[:limit]
+
+    return items[:limit]
+    try:
+        import urllib.request
+        import urllib.parse
+        import json as _json
+
+        q = f"topic:skill-md"
+        if search:
+            q += f" {search}"
+        url = f"https://api.github.com/search/repositories?q={urllib.parse.quote(q)}&per_page={min(limit, 30)}&sort=stars&order=desc"
+        req = urllib.request.Request(
+            url, headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "nanobot"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read())
+    except Exception:
+        return []
+    items: list[dict[str, Any]] = []
+    for repo in data.get("items", [])[:limit]:
+        items.append(
+            {
+                "name": repo.get("name", ""),
+                "description": repo.get("description", "")[:200],
+                "author": repo.get("owner", {}).get("login", ""),
+                "slug": repo.get("full_name", ""),
+                "registry": "GitHub (skill-md)",
+            }
+        )
+    return items
+
+
+def _search_github_topics(search: str, limit: int) -> list[dict[str, Any]]:
+    try:
+        import urllib.request
+        import urllib.parse
+        import json as _json
+
+        q = "topic:skill-md"
+        if search:
+            q += f" {search}"
+        url = f"https://api.github.com/search/repositories?q={urllib.parse.quote(q)}&per_page={min(limit, 30)}&sort=stars&order=desc"
+        req = urllib.request.Request(
+            url, headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "nanobot"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read())
+    except Exception:
+        return []
+    items: list[dict[str, Any]] = []
+    for repo in data.get("items", [])[:limit]:
+        items.append(
+            {
+                "name": repo.get("name", ""),
+                "description": (repo.get("description", "") or "")[:200],
+                "author": repo.get("owner", {}).get("login", ""),
+                "slug": repo.get("full_name", ""),
+                "registry": "GitHub (skill-md)",
+            }
+        )
+    return items
+
+
+def _search_npm_skills(search: str, limit: int) -> list[dict[str, Any]]:
+    try:
+        import urllib.request
+        import urllib.parse
+        import json as _json
+
+        q = "keywords:skill-md"
+        if search:
+            q += f" {search}"
+        url = f"https://registry.npmjs.org/-/v1/search?text={urllib.parse.quote(q)}&size={min(limit, 50)}"
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read())
+    except Exception:
+        return []
+    items: list[dict[str, Any]] = []
+    for obj in data.get("objects", [])[:limit]:
+        pkg = obj.get("package", {})
+        items.append(
+            {
+                "name": pkg.get("name", ""),
+                "description": (pkg.get("description", ""))[:200],
+                "author": pkg.get("author", {}).get(
+                    "name", pkg.get("publisher", {}).get("username", "")
+                ),
+                "slug": pkg.get("name", ""),
+                "registry": "npm (skill-md)",
+            }
+        )
+    return items
+
+
+def _search_anthropic_skills(search: str, limit: int) -> list[dict[str, Any]]:
+    try:
+        import urllib.request
+        import json as _json
+
+        url = "https://api.github.com/repos/anthropics/skills/contents/skills"
+        req = urllib.request.Request(
+            url, headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "nanobot"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read())
+    except Exception:
+        return []
+    items: list[dict[str, Any]] = []
+    for entry in data if isinstance(data, list) else []:
+        if entry.get("type") != "dir":
+            continue
+        name = entry.get("name", "")
+        if search and search.lower() not in name.lower():
+            continue
+        items.append(
+            {
+                "name": name,
+                "description": f"Anthropic official skill: {name}",
+                "author": "anthropics",
+                "slug": f"anthropics/skills/{name}",
+                "registry": "Anthropic Official",
+            }
+        )
+    return items[:limit]
+
+
+def _search_addyosmani_skills(search: str, limit: int) -> list[dict[str, Any]]:
+    try:
+        import urllib.request
+        import json as _json
+
+        url = "https://api.github.com/repos/addyosmani/agent-skills/contents/skills"
+        req = urllib.request.Request(
+            url, headers={"Accept": "application/vnd.github.v3+json", "User-Agent": "nanobot"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read())
+    except Exception:
+        return []
+    items: list[dict[str, Any]] = []
+    for entry in data if isinstance(data, list) else []:
+        if entry.get("type") != "dir":
+            continue
+        name = entry.get("name", "")
+        if search and search.lower() not in name.lower():
+            continue
+        items.append(
+            {
+                "name": name,
+                "description": f"Production-grade skill: {name}",
+                "author": "addyosmani",
+                "slug": f"addyosmani/agent-skills/{name}",
+                "registry": "addyosmani",
+            }
+        )
+    return items[:limit]
+
+
+def _search_lobehub(search: str, limit: int) -> list[dict[str, Any]]:
+    import subprocess
+    import shutil
+    import json as _json
+
+    npx = shutil.which("npx") or shutil.which("npx.cmd")
+    if not npx:
+        return []
+    args = [npx, "-y", "@lobehub/market-cli", "skills", "search"]
+    if search:
+        args.extend([search])
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+
+    items: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines() + result.stderr.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = _json.loads(line)
+            if isinstance(parsed, dict) and "name" in parsed:
+                items.append(
+                    {
+                        "name": parsed.get("name", ""),
+                        "description": parsed.get("description", "")[:200],
+                        "author": parsed.get("author", ""),
+                        "slug": parsed.get("slug", parsed.get("name", "")),
+                        "registry": "LobeHub",
+                    }
+                )
+        except (_json.JSONDecodeError, ValueError):
+            if len(items) < limit and line:
+                parts = line.split(None, 1)
+                name = parts[0].strip().rstrip("...") if parts else ""
+                desc = parts[1].strip()[:200] if len(parts) > 1 else ""
+                if (
+                    name
+                    and not name.startswith("─")
+                    and not name.startswith("┌")
+                    and not name.startswith("│")
+                ):
+                    items.append(
+                        {"name": name, "description": desc, "slug": name, "registry": "LobeHub"}
+                    )
+    return items[:limit]
+
+
+def _search_openpackage(search: str, limit: int) -> list[dict[str, Any]]:
+    import subprocess
+    import shutil
+    import json as _json
+
+    npx = shutil.which("npx") or shutil.which("npx.cmd")
+    if not npx:
+        return []
+    args = [npx, "-y", "opkg", "search"]
+    if search:
+        args.extend([search])
+    args.extend(["--json"])
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+
+    items: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines() + result.stderr.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            parsed = _json.loads(line)
+            if isinstance(parsed, dict) and "name" in parsed:
+                items.append(
+                    {
+                        "name": parsed.get("name", ""),
+                        "description": parsed.get("description", "")[:200],
+                        "author": parsed.get("author", parsed.get("publisher", "")),
+                        "slug": parsed.get("slug", parsed.get("name", "")),
+                        "registry": "OpenPackage",
+                    }
+                )
+        except (_json.JSONDecodeError, ValueError):
+            if (
+                len(items) < limit
+                and line
+                and not line.startswith("[")
+                and not line.startswith("{")
+            ):
+                parts = line.split(None, 1)
+                if len(parts) >= 1:
+                    items.append(
+                        {
+                            "name": parts[0].strip(),
+                            "description": parts[1].strip()[:200] if len(parts) > 1 else "",
+                            "slug": parts[0].strip(),
+                            "registry": "OpenPackage",
+                        }
+                    )
+    return items[:limit]
+
+
+def _search_autoskills(search: str, limit: int) -> list[dict[str, Any]]:
+    import subprocess
+    import shutil
+    import json as _json
+
+    npx = shutil.which("npx") or shutil.which("npx.cmd")
+    if not npx:
+        return []
+    try:
+        result = subprocess.run(
+            [npx, "-y", "autoskills", "--dry-run"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+
+    items: list[dict[str, Any]] = []
+    for line in result.stdout.splitlines() + result.stderr.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if search and search.lower() not in line.lower():
+            continue
+        if "→" in line or "install" in line.lower() or "detected" in line.lower():
+            parts = line.split("→" if "→" in line else None, 1)
+            name = parts[0].strip() if parts else line
+            desc = parts[1].strip()[:200] if len(parts) > 1 else ""
+            items.append(
+                {
+                    "name": name.strip(),
+                    "description": desc,
+                    "slug": name.strip(),
+                    "registry": "AutoSkills",
+                }
+            )
+    return items[:limit]
+
+
+_SEARCHERS = {
+    "clawhub": _search_clawhub,
+    "skillsmp": _search_skillsmp,
+    "vercel_skills": _search_vercel_skills,
+    "github_topics": _search_github_topics,
+    "npm_skills": _search_npm_skills,
+    "anthropic_skills": _search_anthropic_skills,
+    "addyosmani_skills": _search_addyosmani_skills,
+    "lobehub": _search_lobehub,
+    "openpackage": _search_openpackage,
+    "autoskills": _search_autoskills,
+}
+
+
+def search_registry_skills(query: QueryParams) -> dict[str, Any]:
+    search = query.get("query", [""])[0] or ""
+    limit = int(query.get("limit", ["10"])[0]) or 10
+    selected = query.get("registries", [None])
+    if not selected or not selected[0]:
+        selected = ["clawhub", "vercel_skills"]
+
+    config = load_config()
+    enabled_registries = {}
+    for reg in config.tools.skill_registries:
+        if reg.get("enabled", True):
+            enabled_registries[reg.get("type", reg.get("name", ""))] = reg
+
+    all_items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for reg_type in selected:
+        if not isinstance(reg_type, str) or not reg_type:
+            continue
+        reg_type = reg_type.strip()
+        if reg_type not in enabled_registries and reg_type not in _SEARCHERS:
+            continue
+        searcher = _SEARCHERS.get(reg_type)
+        if searcher is None:
+            continue
+        for item in searcher(search, max(limit // len(selected), 3)):
+            key = item.get("slug") or item.get("name", "")
+            if key and key not in seen:
+                seen.add(key)
+                all_items.append(item)
+
+    return {"results": all_items, "registries_queried": selected}
 
 
 def update_agent_settings(query: QueryParams) -> dict[str, Any]:
@@ -943,10 +1833,7 @@ def update_model_configuration(query: QueryParams) -> dict[str, Any]:
     context_window_tokens = _parse_context_window_tokens(
         _query_first_alias(query, "context_window_tokens", "contextWindowTokens")
     )
-    if (
-        context_window_tokens is not None
-        and preset.context_window_tokens != context_window_tokens
-    ):
+    if context_window_tokens is not None and preset.context_window_tokens != context_window_tokens:
         preset.context_window_tokens = context_window_tokens
         changed = True
 
@@ -993,7 +1880,9 @@ def update_provider_settings(query: QueryParams) -> dict[str, Any]:
             try:
                 parsed_api_type = type(provider_config)(api_type=api_type).api_type
             except Exception:
-                raise WebUISettingsError("api_type must be auto, chat_completions, or responses") from None
+                raise WebUISettingsError(
+                    "api_type must be auto, chat_completions, or responses"
+                ) from None
             if provider_config.api_type != parsed_api_type:
                 provider_config.api_type = parsed_api_type
                 changed = True
@@ -1044,7 +1933,9 @@ def login_oauth_provider(query: QueryParams) -> dict[str, Any]:
                 login_github_copilot,
             )
         except ImportError:
-            raise WebUISettingsError("GitHub Copilot OAuth support is unavailable", status=500) from None
+            raise WebUISettingsError(
+                "GitHub Copilot OAuth support is unavailable", status=500
+            ) from None
 
         token = get_github_copilot_login_status()
         if not token:
@@ -1070,12 +1961,16 @@ def logout_oauth_provider(query: QueryParams) -> dict[str, Any]:
             from oauth_cli_kit.storage import FileTokenStorage
         except ImportError:
             raise WebUISettingsError("oauth_cli_kit is not installed", status=500) from None
-        token_path = FileTokenStorage(token_filename=OPENAI_CODEX_PROVIDER.token_filename).get_token_path()
+        token_path = FileTokenStorage(
+            token_filename=OPENAI_CODEX_PROVIDER.token_filename
+        ).get_token_path()
     elif spec.name == "github_copilot":
         try:
             from nanobot.providers.github_copilot_provider import get_storage
         except ImportError:
-            raise WebUISettingsError("GitHub Copilot OAuth support is unavailable", status=500) from None
+            raise WebUISettingsError(
+                "GitHub Copilot OAuth support is unavailable", status=500
+            ) from None
         token_path = get_storage().get_token_path()
     else:
         raise WebUISettingsError("OAuth logout is not supported for this provider")
@@ -1087,18 +1982,23 @@ def logout_oauth_provider(query: QueryParams) -> dict[str, Any]:
 
 
 def update_network_safety_settings(query: QueryParams) -> dict[str, Any]:
-    raw_allow = (
-        _query_first_alias(query, "webui_allow_local_service_access", "webuiAllowLocalServiceAccess")
-        or _query_first_alias(query, "allow_local_preview_access", "allowLocalPreviewAccess")
+    raw_allow = _query_first_alias(
+        query, "webui_allow_local_service_access", "webuiAllowLocalServiceAccess"
+    ) or _query_first_alias(query, "allow_local_preview_access", "allowLocalPreviewAccess")
+    raw_default_access_mode = _query_first_alias(
+        query, "webui_default_access_mode", "webuiDefaultAccessMode"
     )
-    raw_default_access_mode = _query_first_alias(query, "webui_default_access_mode", "webuiDefaultAccessMode")
     if raw_allow is None and raw_default_access_mode is None:
-        raise WebUISettingsError("webui_allow_local_service_access or webui_default_access_mode is required")
+        raise WebUISettingsError(
+            "webui_allow_local_service_access or webui_default_access_mode is required"
+        )
 
     config = load_config()
     changed = False
     if raw_allow is not None:
-        webui_allow_local_service_access = _parse_bool(raw_allow, "webui_allow_local_service_access")
+        webui_allow_local_service_access = _parse_bool(
+            raw_allow, "webui_allow_local_service_access"
+        )
         if config.tools.webui_allow_local_service_access != webui_allow_local_service_access:
             config.tools.webui_allow_local_service_access = webui_allow_local_service_access
             changed = True

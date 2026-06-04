@@ -75,7 +75,8 @@
       "mcp": "MCP",
       "runtime": "System",
       "advanced": "Security",
-      "apps": "Apps"
+      "apps": "Apps",
+      "skills": "Skills"
     },
     "sections": {
       "interface": "Interface",
@@ -95,7 +96,8 @@
       "capabilities": "Capabilities",
       "apps": "Apps",
       "nativeHost": "Native host",
-      "hostSafety": "App safety"
+      "hostSafety": "App safety",
+      "skills": "Skills"
     },
     "models": {
       "selectModel": "Select model",
@@ -427,6 +429,48 @@
       "signInBeforeSaving": "Sign in before saving this OAuth provider as the active model provider.",
       "signedIn": "Signed in",
       "notSignedIn": "Not signed in"
+    },
+    "skills": {
+      "sectionTitle": "Skills",
+      "noDescription": "No description",
+      "noneTitle": "No skills found",
+      "noneDescription": "Place skill folders under ~/.nanobot/workspace/skills/",
+      "noneFound": "No skills found",
+      "noneFoundQuery": "No skills match your search",
+      "noneFoundEmpty": "Create a new skill or install from the registry",
+      "searchPlaceholder": "Search skills...",
+      "searchRegistryPlaceholder": "Search ClawHub registry...",
+      "builtin": "Builtin",
+      "workspace": "Workspace",
+      "create": "Create",
+      "search": "Search",
+      "install": "Install",
+      "searching": "Searching registry...",
+      "registry": "Registry",
+      "newSkill": "New skill",
+      "skillName": "Name",
+      "skillNameHelp": "Lowercase, hyphens, max 64 chars",
+      "description": "Description",
+      "descriptionHelp": "What the skill does and when to use it",
+      "descriptionPlaceholder": "Brief description",
+      "backToList": "Back",
+      "saveChanges": "Save changes",
+      "enabledMsg": "Skill \"{{skillName}}\" enabled",
+      "disabledMsg": "Skill \"{{skillName}}\" disabled",
+      "createdMsg": "Skill created",
+      "deletedMsg": "Skill \"{{skillName}}\" deleted",
+      "updatedMsg": "Skill \"{{skillName}}\" updated",
+      "installedMsg": "Skill \"{{slug}}\" installed",
+      "license": "License",
+      "allowedTools": "Allowed tools",
+      "always": "Always active",
+      "body": "Instructions (markdown)",
+      "aiGenerate": "AI Generation",
+      "aiPromptPlaceholder": "Describe the skill you want in natural language...",
+      "aiHelp": "Describe what the skill should do. The AI will generate a complete SKILL.md following the agentskills.io v1 standard. Cmd+Enter to generate.",
+      "generate": "Generate",
+      "generating": "Generating...",
+      "aiGenerated": "AI generated skill from prompt"
     }
   },
   "chat": {

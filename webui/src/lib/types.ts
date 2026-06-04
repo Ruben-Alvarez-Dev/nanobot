@@ -244,6 +244,52 @@ export interface ProviderModelsPayload {
   fetched_at?: number;
 }
 
+export interface SkillEntry {
+  name: string;
+  source: "builtin" | "workspace";
+  description: string;
+  enabled: boolean;
+  path?: string;
+  always?: boolean;
+  license?: string;
+  has_scripts?: boolean;
+  has_references?: boolean;
+  has_assets?: boolean;
+  size_bytes?: number;
+}
+
+export interface SkillContentPayload {
+  name: string;
+  path: string;
+  source: "builtin" | "workspace";
+  content: string;
+}
+
+export interface RegistrySkillEntry {
+  name: string;
+  description: string;
+  author?: string;
+  version?: string;
+  slug?: string;
+  registry?: string;
+}
+
+export interface RegistrySearchPayload {
+  results: RegistrySkillEntry[];
+  registries_queried?: string[];
+}
+
+export interface SkillRegistry {
+  name: string;
+  type: string;
+  url: string;
+  enabled: boolean;
+}
+
+export interface SkillRegistriesPayload {
+  registries: SkillRegistry[];
+}
+
 export interface SettingsPayload {
   surface?: RuntimeSurface;
   runtime_surface?: RuntimeSurface;
@@ -351,6 +397,10 @@ export interface SettingsPayload {
       schedule: string;
     };
     unified_session: boolean;
+  };
+  skills?: {
+    skills: SkillEntry[];
+    disabled_skills: string[];
   };
   advanced: {
     restrict_to_workspace: boolean;

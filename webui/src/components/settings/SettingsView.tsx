@@ -20,6 +20,7 @@ import {
   Cpu,
   Database,
   Eye,
+  ExternalLink,
   EyeOff,
   Gem,
   Globe2,
@@ -72,22 +73,30 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   createModelConfiguration,
+  createSkill,
+  deleteSkill,
+  editSkill,
   fetchSettings,
+  fetchSkillContent,
+  generateSkill,
   fetchCliApps,
   fetchMcpPresets,
   fetchProviderModels,
   importMcpConfig,
+  installSkillFromRegistry,
   loginProviderOAuth,
   logoutProviderOAuth,
   runCliAppAction,
   runMcpPresetAction,
   saveCustomMcpServer,
+  searchRegistrySkills,
   updateImageGenerationSettings,
   updateMcpServerTools,
   updateModelConfiguration,
   updateNetworkSafetySettings,
   updateProviderSettings,
   updateSettings,
+  updateSkillsSettings,
   updateWebSearchSettings,
 } from "@/lib/api";
 import { notifyCliAppsChanged } from "@/lib/cli-app-events";
@@ -108,7 +117,9 @@ import type {
   McpPresetsPayload,
   NetworkSafetySettingsUpdate,
   ProviderModelsPayload,
+  RegistrySearchPayload,
   SettingsPayload,
+  SkillContentPayload,
   WebSearchSettingsUpdate,
   WebuiDefaultAccessMode,
 } from "@/lib/types";
@@ -120,6 +131,7 @@ export type SettingsSectionKey =
   | "image"
   | "browser"
   | "apps"
+  | "skills"
   | "runtime"
   | "advanced";
 
@@ -348,6 +360,20 @@ export function SettingsView({
   const [webSearchSaving, setWebSearchSaving] = useState(false);
   const [imageGenerationSaving, setImageGenerationSaving] = useState(false);
   const [networkSafetySaving, setNetworkSafetySaving] = useState(false);
+  const [skillsSaving, setSkillsSaving] = useState(false);
+  const [skillsQuery, setSkillsQuery] = useState("");
+  const [skillsFilter, setSkillsFilter] = useState<"all" | "builtin" | "workspace">("all");
+  const [skillsBusy, setSkillsBusy] = useState<string | null>(null);
+  const [skillsStatusMsg, setSkillsStatusMsg] = useState<string | null>(null);
+  const [skillsStatusErr, setSkillsStatusErr] = useState<string | null>(null);
+  const [createSkillForm, setCreateSkillForm] = useState({ name: "", description: "", license: "", always: false, allowedTools: "", body: "" });
+  const [createSkillOpen, setCreateSkillOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [registryResults, setRegistryResults] = useState<RegistrySearchPayload | null>(null);
+  const [registryLoading, setRegistryLoading] = useState(false);
+  const [editingSkill, setEditingSkill] = useState<SkillContentPayload | null>(null);
+  const [editorContent, setEditorContent] = useState("");
   const [hostEngineApplying, setHostEngineApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SettingsSectionKey>(initialSection);
@@ -809,6 +835,141 @@ export function SettingsView({
       setError((err as Error).message);
     } finally {
       setNetworkSafetySaving(false);
+    }
+  };
+
+  const handleToggleSkill = async (skillName: string, enabled: boolean) => {
+    if (skillsSaving) return;
+    setSkillsSaving(true);
+    try {
+      const payload = await updateSkillsSettings(token, skillName, enabled);
+      applyPayload(payload);
+      setSkillsStatusMsg(enabled ? t("settings.skills.enabledMsg", { defaultValue: `Skill "${skillName}" enabled` }) : t("settings.skills.disabledMsg", { defaultValue: `Skill "${skillName}" disabled` }));
+    } catch (err) {
+      setSkillsStatusErr((err as Error).message);
+    } finally {
+      setSkillsSaving(false);
+    }
+  };
+
+  const handleCreateSkill = async () => {
+    if (!createSkillForm.name || skillsBusy) return;
+    setSkillsBusy("create");
+    try {
+      const f = createSkillForm;
+      let frontmatter = `name: ${f.name}\ndescription: ${f.description || "[TODO: describe]"}`;
+      if (f.license) frontmatter += `\nlicense: ${f.license}`;
+      if (f.always) frontmatter += `\nalways: true`;
+      if (f.allowedTools) frontmatter += `\nallowed-tools: ${f.allowedTools}`;
+      const body = f.body || `# ${f.name}\n\n## Overview\n\n[TODO: Write instructions.]\n`;
+      const content = `---\n${frontmatter}\n---\n\n${body}`;
+      await createSkill(token, f.name, f.description || undefined);
+      await editSkill(token, f.name, content);
+      setCreateSkillOpen(false);
+      setCreateSkillForm({ name: "", description: "", license: "", always: false, allowedTools: "", body: "" });
+      setSkillsStatusMsg(t("settings.skills.createdMsg", { defaultValue: "Skill created" }));
+      const payload = await fetchSettings(token);
+      applyPayload(payload);
+    } catch (err) {
+      setSkillsStatusErr((err as Error).message);
+    } finally {
+      setSkillsBusy(null);
+    }
+  };
+
+  const handleGenerateSkill = async () => {
+    if (!aiPrompt || aiGenerating) return;
+    setAiGenerating(true);
+    try {
+      const result = await generateSkill(token, aiPrompt);
+      setCreateSkillForm({
+        name: result.name,
+        description: "",
+        license: "",
+        always: false,
+        allowedTools: "",
+        body: result.content,
+      });
+      setCreateSkillOpen(true);
+      setAiPrompt("");
+      setSkillsStatusMsg(t("settings.skills.aiGenerated", { defaultValue: "AI generated skill from prompt" }));
+    } catch (err) {
+      setSkillsStatusErr((err as Error).message);
+    } finally {
+      setAiGenerating(false);
+    }
+  };
+
+  const handleDeleteSkill = async (skillName: string) => {
+    if (skillsBusy) return;
+    setSkillsBusy(`delete:${skillName}`);
+    try {
+      await deleteSkill(token, skillName);
+      const payload = await fetchSettings(token);
+      applyPayload(payload);
+      setSkillsStatusMsg(t("settings.skills.deletedMsg", { defaultValue: `Skill "${skillName}" deleted` }));
+    } catch (err) {
+      setSkillsStatusErr((err as Error).message);
+    } finally {
+      setSkillsBusy(null);
+    }
+  };
+
+  const handleViewSkill = async (skillName: string) => {
+    if (skillsBusy) return;
+    setSkillsBusy(`view:${skillName}`);
+    try {
+      const data = await fetchSkillContent(token, skillName);
+      setEditingSkill(data);
+      setEditorContent(data.content);
+    } catch (err) {
+      setSkillsStatusErr((err as Error).message);
+    } finally {
+      setSkillsBusy(null);
+    }
+  };
+
+  const handleSaveSkillEdit = async () => {
+    if (!editingSkill || skillsBusy) return;
+    setSkillsBusy(`save:${editingSkill.name}`);
+    try {
+      await editSkill(token, editingSkill.name, editorContent);
+      const payload = await fetchSettings(token);
+      applyPayload(payload);
+      setEditingSkill(null);
+      setSkillsStatusMsg(t("settings.skills.updatedMsg", { defaultValue: `Skill "${editingSkill.name}" updated` }));
+    } catch (err) {
+      setSkillsStatusErr((err as Error).message);
+    } finally {
+      setSkillsBusy(null);
+    }
+  };
+
+  const handleSearchRegistry = async () => {
+    if (registryLoading) return;
+    setRegistryLoading(true);
+    setRegistryResults(null);
+    try {
+      const data = await searchRegistrySkills(token, skillsQuery || "", 15);
+      setRegistryResults(data);
+    } catch (err) {
+      setSkillsStatusErr((err as Error).message);
+    } finally {
+      setRegistryLoading(false);
+    }
+  };
+
+  const handleInstallFromRegistry = async (slug: string) => {
+    if (skillsBusy) return;
+    setSkillsBusy(`install:${slug}`);
+    try {
+      const payload = await installSkillFromRegistry(token, slug);
+      applyPayload(payload);
+      setSkillsStatusMsg(t("settings.skills.installedMsg", { defaultValue: `Skill "${slug}" installed` }));
+    } catch (err) {
+      setSkillsStatusErr((err as Error).message);
+    } finally {
+      setSkillsBusy(null);
     }
   };
 
@@ -1304,6 +1465,42 @@ export function SettingsView({
             requiresRestartPending={pendingRestartSections.runtime}
           />
         );
+      case "skills":
+        return (
+          <SkillsSettings
+            settings={settings}
+            busy={skillsBusy}
+            query={skillsQuery}
+            filter={skillsFilter}
+            registryResults={registryResults}
+            registryLoading={registryLoading}
+            createForm={createSkillForm}
+            createOpen={createSkillOpen}
+            editingSkill={editingSkill}
+            editorContent={editorContent}
+            statusMsg={skillsStatusMsg}
+            statusErr={skillsStatusErr}
+            onToggleSkill={handleToggleSkill}
+            onChangeQuery={setSkillsQuery}
+            onChangeFilter={setSkillsFilter}
+            onCreateForm={setCreateSkillForm}
+            onOpenCreate={() => setCreateSkillOpen(true)}
+            onCloseCreate={() => setCreateSkillOpen(false)}
+            onCreateSkill={handleCreateSkill}
+            onDeleteSkill={handleDeleteSkill}
+            onViewSkill={handleViewSkill}
+            onCloseEditor={() => { setEditingSkill(null); setEditorContent(""); }}
+            onChangeContent={setEditorContent}
+            onSaveEdit={handleSaveSkillEdit}
+            onSearchRegistry={handleSearchRegistry}
+            onInstallFromRegistry={handleInstallFromRegistry}
+            aiPrompt={aiPrompt}
+            aiGenerating={aiGenerating}
+            onGenerateSkill={handleGenerateSkill}
+            onChangeAiPrompt={setAiPrompt}
+            onDismissStatus={() => { setSkillsStatusMsg(null); setSkillsStatusErr(null); }}
+          />
+        );
       case "advanced":
         return (
           <AdvancedSettings
@@ -1395,6 +1592,7 @@ const SETTINGS_NAV_ITEMS: Array<{ key: SettingsSectionKey; icon: LucideIcon; fal
   { key: "models", icon: SlidersHorizontal, fallback: "Models" },
   { key: "image", icon: ImageIcon, fallback: "Image" },
   { key: "browser", icon: Globe2, fallback: "Web" },
+  { key: "skills", icon: Brain, fallback: "Skills" },
   { key: "runtime", icon: Server, fallback: "System" },
   { key: "advanced", icon: ShieldCheck, fallback: "Security" },
 ];
@@ -5499,6 +5697,343 @@ function NumberInput({
         className="h-8 w-24 rounded-full text-[13px]"
       />
       {suffix ? <span className="text-[12px] text-muted-foreground">{suffix}</span> : null}
+    </div>
+  );
+}
+
+function SkillsSettings({
+  settings,
+  busy,
+  query,
+  filter,
+  registryResults,
+  registryLoading,
+  createForm,
+  createOpen,
+  editingSkill,
+  editorContent,
+  statusMsg,
+  statusErr,
+  aiPrompt,
+  aiGenerating,
+  onToggleSkill,
+  onChangeQuery,
+  onChangeFilter,
+  onCreateForm,
+  onOpenCreate,
+  onCloseCreate,
+  onCreateSkill,
+  onDeleteSkill,
+  onViewSkill,
+  onCloseEditor,
+  onChangeContent,
+  onSaveEdit,
+  onSearchRegistry,
+  onInstallFromRegistry,
+  onGenerateSkill,
+  onChangeAiPrompt,
+  onDismissStatus,
+}: {
+  settings: SettingsPayload;
+  busy: string | null;
+  query: string;
+  filter: "all" | "builtin" | "workspace";
+  registryResults: RegistrySearchPayload | null;
+  registryLoading: boolean;
+  createForm: { name: string; description: string; license: string; always: boolean; allowedTools: string; body: string };
+  createOpen: boolean;
+  editingSkill: SkillContentPayload | null;
+  editorContent: string;
+  statusMsg: string | null;
+  statusErr: string | null;
+  aiPrompt: string;
+  aiGenerating: boolean;
+  onToggleSkill: (name: string, enabled: boolean) => void;
+  onChangeQuery: (q: string) => void;
+  onChangeFilter: (f: "all" | "builtin" | "workspace") => void;
+  onCreateForm: (f: { name: string; description: string; license: string; always: boolean; allowedTools: string; body: string }) => void;
+  onOpenCreate: () => void;
+  onCloseCreate: () => void;
+  onCreateSkill: () => void;
+  onDeleteSkill: (name: string) => void;
+  onViewSkill: (name: string) => void;
+  onCloseEditor: () => void;
+  onChangeContent: (c: string) => void;
+  onSaveEdit: () => void;
+  onSearchRegistry: () => void;
+  onInstallFromRegistry: (slug: string) => void;
+  onGenerateSkill: () => void;
+  onChangeAiPrompt: (p: string) => void;
+  onDismissStatus: () => void;
+}) {
+  const { t } = useTranslation();
+  const tx = (key: string, fallback: string) => t(key, { defaultValue: fallback });
+  const skills = settings.skills?.skills ?? [];
+
+  const filtered = skills.filter((s) => {
+    if (filter === "builtin" && s.source !== "builtin") return false;
+    if (filter === "workspace" && s.source !== "workspace") return false;
+    if (query && !s.name.toLowerCase().includes(query.toLowerCase()) && !(s.description || "").toLowerCase().includes(query.toLowerCase())) return false;
+    return true;
+  });
+
+  return (
+    <div className="space-y-7">
+      {(statusMsg || statusErr) ? (
+        <div className={cn("mx-0 flex items-start gap-3 rounded-[22px] px-5 py-3.5 text-[13px]", statusErr ? "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300" : "bg-green-100 text-green-800 dark:bg-green-950/40 dark:text-green-300")}>
+          <span className="flex-1">{statusErr || statusMsg}</span>
+          <button onClick={onDismissStatus} className="ml-2 shrink-0 opacity-50 hover:opacity-100">✕</button>
+        </div>
+      ) : null}
+
+      {editingSkill ? (
+        <section>
+          <div className="mb-3 flex items-center gap-3">
+            <Button variant="ghost" size="sm" onClick={onCloseEditor} className="h-8 px-2">
+              <ChevronLeft className="mr-1 h-4 w-4" />{tx("settings.skills.backToList", "Back")}
+            </Button>
+            <SettingsSectionTitle>{editingSkill.name}</SettingsSectionTitle>
+            {editingSkill.source === "workspace" ? (
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">workspace</span>
+            ) : (
+              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">builtin · read-only</span>
+            )}
+          </div>
+          <SettingsGroup>
+            <div className="p-4">
+              <textarea
+                className="min-h-[420px] w-full rounded-[12px] border border-border bg-background p-4 font-mono text-[13px] leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring"
+                value={editorContent}
+                onChange={(e) => onChangeContent(e.target.value)}
+                readOnly={editingSkill.source !== "workspace"}
+              />
+            </div>
+            {editingSkill.source === "workspace" ? (
+              <div className="flex justify-end gap-2 px-4 pb-4">
+                <Button variant="ghost" size="sm" onClick={onCloseEditor}>{t("settings.actions.cancel", { defaultValue: "Cancel" })}</Button>
+                <Button size="sm" onClick={onSaveEdit} disabled={!!busy}>
+                  {busy ? t("settings.actions.saving", { defaultValue: "Saving..." }) : tx("settings.skills.saveChanges", "Save changes")}
+                </Button>
+              </div>
+            ) : null}
+          </SettingsGroup>
+        </section>
+      ) : createOpen ? (
+        <section>
+          <div className="mb-3 flex items-center gap-3">
+            <Button variant="ghost" size="sm" onClick={onCloseCreate} className="h-8 px-2">
+              <ChevronLeft className="mr-1 h-4 w-4" />{tx("settings.skills.backToList", "Back")}
+            </Button>
+            <SettingsSectionTitle>{tx("settings.skills.newSkill", "New skill")}</SettingsSectionTitle>
+          </div>
+          <SettingsGroup>
+            <SettingsRow title={tx("settings.skills.skillName", "Name")} description={tx("settings.skills.skillNameHelp", "Lowercase, hyphens, max 64 chars")}>
+              <Input
+                className="h-8 w-52 rounded-full text-[13px]"
+                placeholder="my-skill"
+                value={createForm.name}
+                onChange={(e) => onCreateForm({ ...createForm, name: e.target.value })}
+              />
+            </SettingsRow>
+            <SettingsRow title={tx("settings.skills.description", "Description")} description={tx("settings.skills.descriptionHelp", "What the skill does and when to use it. Include trigger keywords.")}>
+              <Textarea
+                className="h-16 w-80 rounded-xl text-[13px]"
+                placeholder={tx("settings.skills.descriptionPlaceholder", "Brief description")}
+                value={createForm.description}
+                onChange={(e) => onCreateForm({ ...createForm, description: e.target.value })}
+              />
+            </SettingsRow>
+            <SettingsRow title={tx("settings.skills.license", "License")} description="Optional: MIT, Apache-2.0, etc.">
+              <Input
+                className="h-8 w-44 rounded-full text-[13px]"
+                placeholder="MIT"
+                value={createForm.license}
+                onChange={(e) => onCreateForm({ ...createForm, license: e.target.value })}
+              />
+            </SettingsRow>
+            <SettingsRow title={tx("settings.skills.allowedTools", "Allowed tools")} description="Optional: space-separated tool names this skill may use">
+              <Input
+                className="h-8 w-52 rounded-full text-[13px]"
+                placeholder="read_file write_file"
+                value={createForm.allowedTools}
+                onChange={(e) => onCreateForm({ ...createForm, allowedTools: e.target.value })}
+              />
+            </SettingsRow>
+            <SettingsRow title={tx("settings.skills.always", "Always active")} description="If enabled, skill is always loaded into agent context">
+              <ToggleButton
+                checked={createForm.always}
+                onChange={() => onCreateForm({ ...createForm, always: !createForm.always })}
+                label={createForm.always ? "Yes" : "No"}
+              />
+            </SettingsRow>
+            <SettingsRow title={tx("settings.skills.body", "Instructions (markdown)")} description="Step-by-step instructions, examples, edge cases. Under 500 lines recommended.">
+              <Textarea
+                className="min-h-[220px] w-full rounded-xl font-mono text-[12px] leading-relaxed"
+                placeholder={`# ${createForm.name || "skill-name"}\n\n## Overview\n\n[TODO: Write instructions here...]\n`}
+                value={createForm.body}
+                onChange={(e) => onCreateForm({ ...createForm, body: e.target.value })}
+              />
+            </SettingsRow>
+          </SettingsGroup>
+          <div className="mt-3 space-y-2">
+            <SettingsSectionTitle>{tx("settings.skills.aiGenerate", "AI Generation")}</SettingsSectionTitle>
+            <div className="flex gap-2">
+              <Textarea
+                className="min-h-[80px] flex-1 rounded-xl text-[13px]"
+                placeholder={tx("settings.skills.aiPromptPlaceholder", "Describe the skill you want in natural language...")}
+                value={aiPrompt}
+                onChange={(e) => onChangeAiPrompt(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && e.metaKey) onGenerateSkill(); }}
+              />
+              <Button variant="secondary" size="sm" className="h-9 shrink-0 self-end rounded-full" onClick={onGenerateSkill} disabled={aiGenerating || !aiPrompt}>
+                {aiGenerating ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1 h-3.5 w-3.5" />}
+                {aiGenerating ? tx("settings.skills.generating", "Generating...") : tx("settings.skills.generate", "Generate")}
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">{tx("settings.skills.aiHelp", "Describe what the skill should do. The AI will generate a complete SKILL.md following the agentskills.io v1 standard. Cmd+Enter to generate.")}</p>
+          </div>
+          <SettingsFooter dirty={!!createForm.name} saving={busy === "create"} saved={false} onSave={onCreateSkill} />
+        </section>
+      ) : (
+        <>
+          <section>
+            <SettingsSectionTitle>{tx("settings.sections.skills", "Skills")}</SettingsSectionTitle>
+            <div className="flex items-center gap-3 pb-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="h-9 w-full rounded-full pl-9 text-[13px]"
+                  placeholder={tx("settings.skills.searchPlaceholder", "Search skills...")}
+                  value={query}
+                  onChange={(e) => onChangeQuery(e.target.value)}
+                />
+              </div>
+              <SegmentedControl
+                options={[
+                  { value: "all", label: tx("settings.values.all", "All") },
+                  { value: "builtin", label: tx("settings.skills.builtin", "Builtin") },
+                  { value: "workspace", label: tx("settings.skills.workspace", "Workspace") },
+                ]}
+                value={filter}
+                onChange={(v) => onChangeFilter(v as "all" | "builtin" | "workspace")}
+              />
+              <Button variant="outline" size="sm" onClick={onOpenCreate} className="h-9 rounded-full text-[13px]">
+                <Plus className="mr-1 h-3.5 w-3.5" />{tx("settings.skills.create", "Create")}
+              </Button>
+            </div>
+            <SettingsGroup>
+              {filtered.length === 0 ? (
+                <SettingsRow title={tx("settings.skills.noneFound", "No skills found")} description={query ? tx("settings.skills.noneFoundQuery", "No skills match your search") : tx("settings.skills.noneFoundEmpty", "Create a new skill or install from the registry")}>
+                  <span />
+                </SettingsRow>
+              ) : (
+                filtered.map((skill) => (
+                  <SettingsRow key={skill.name} title={skill.name} description={skill.description || tx("settings.skills.noDescription", "No description")}>
+                    <div className="flex items-center gap-2">
+                      {skill.source === "builtin" ? (
+                        <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">builtin</span>
+                      ) : (
+                        <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">workspace</span>
+                      )}
+                      <div className="flex items-center gap-1">
+                        <Button variant="ghost" size="sm" className="h-7 px-1.5 text-[11px]" onClick={() => onViewSkill(skill.name)} disabled={!!busy}>
+                          {busy === `view:${skill.name}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Eye className="h-3 w-3" />}
+                        </Button>
+                        {skill.source === "workspace" ? (
+                          <Button variant="ghost" size="sm" className="h-7 px-1.5 text-[11px] text-red-500 hover:text-red-600" onClick={() => onDeleteSkill(skill.name)} disabled={!!busy}>
+                            {busy === `delete:${skill.name}` ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                          </Button>
+                        ) : null}
+                        <ToggleButton
+                          checked={skill.enabled}
+                          onChange={() => onToggleSkill(skill.name, !skill.enabled)}
+                          label={skill.enabled ? tx("settings.values.enabled", "Enabled") : tx("settings.values.disabled", "Disabled")}
+                        />
+                      </div>
+                    </div>
+                  </SettingsRow>
+                ))
+              )}
+            </SettingsGroup>
+          </section>
+
+          <section>
+            <SettingsSectionTitle>{tx("settings.skills.registry", "Registry")}</SettingsSectionTitle>
+            <div className="flex items-center gap-2 pb-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  className="h-9 w-full rounded-full pl-9 text-[13px]"
+                  placeholder={tx("settings.skills.searchRegistryPlaceholder", "Search ClawHub registry...")}
+                  value={query}
+                  onChange={(e) => onChangeQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") onSearchRegistry(); }}
+                />
+              </div>
+              <Button variant="outline" size="sm" onClick={onSearchRegistry} disabled={registryLoading} className="h-9 rounded-full text-[13px]">
+                {registryLoading ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Search className="mr-1 h-3.5 w-3.5" />}
+                {tx("settings.skills.search", "Search")}
+              </Button>
+            </div>
+            {registryResults?.results && registryResults.results.length > 0 ? (
+              <SettingsGroup>
+                {registryResults.results.map((item) => (
+                  <SettingsRow
+                    key={item.slug || item.name}
+                    title={item.name}
+                    description={item.description || ""}
+                  >
+                    <div className="flex items-center gap-2">
+                      {item.registry ? (
+                        <span className={cn(
+                          "rounded-full px-1.5 py-0.5 text-[10px]",
+                          item.registry === "Anthropic Official" && "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+                          item.registry === "GitHub (skill-md)" && "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
+                          item.registry === "npm (skill-md)" && "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
+                          item.registry === "skills.sh" && "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+                          item.registry === "ClawHub" && "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+                          item.registry === "LobeHub" && "bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300",
+                          item.registry === "SkillsMP" && "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300",
+                          item.registry === "OpenPackage" && "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300",
+                          item.registry === "AutoSkills" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
+                          item.registry === "addyosmani" && "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300",
+                          "bg-muted text-muted-foreground",
+                        )}>
+                          {item.registry}
+                        </span>
+                      ) : null}
+                      {item.author ? (
+                        <span className="text-[11px] text-muted-foreground">{item.author}</span>
+                      ) : null}
+                      {item.slug ? (
+                        <a
+                          href={item.slug.startsWith("http") ? item.slug : item.slug.includes("/") ? `https://github.com/${item.slug}` : `https://www.npmjs.com/package/${item.slug}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex h-7 items-center rounded-full px-2 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                          title={item.slug}
+                        >
+                          <ExternalLink className="mr-1 h-2.5 w-2.5" />
+                          {tx("settings.skills.viewSource", "Source")}
+                        </a>
+                      ) : null}
+                      <Button variant="outline" size="sm" className="h-7 rounded-full text-[11px]" onClick={() => onInstallFromRegistry(item.slug || item.name)} disabled={!!busy}>
+                        {busy === `install:${item.slug || item.name}` ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Plus className="mr-1 h-3 w-3" />}
+                        {tx("settings.skills.install", "Install")}
+                      </Button>
+                    </div>
+                  </SettingsRow>
+                ))}
+              </SettingsGroup>
+            ) : registryLoading ? (
+              <div className="flex items-center justify-center py-8 text-[13px] text-muted-foreground">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />{tx("settings.skills.searching", "Searching registry...")}
+              </div>
+            ) : null}
+            <SettingsFooter dirty={false} saving={false} saved={false} onSave={() => {}} />
+          </section>
+        </>
+      )}
     </div>
   );
 }

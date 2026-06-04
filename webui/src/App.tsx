@@ -74,6 +74,7 @@ const SETTINGS_SECTION_KEYS: SettingsSectionKey[] = [
   "image",
   "browser",
   "apps",
+  "skills",
   "runtime",
   "advanced",
 ];
